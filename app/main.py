@@ -4,7 +4,6 @@ import socket
 import time
 from datetime import datetime
 
-import psutil
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
@@ -27,6 +26,18 @@ def safe_env():
     }
 
 
+def mem_info():
+    try:
+        with open("/proc/meminfo") as f:
+            lines = {l.split(":")[0]: int(l.split()[1]) for l in f if ":" in l}
+        total = lines.get("MemTotal", 0) // 1024
+        free = lines.get("MemAvailable", 0) // 1024
+        used = total - free
+        return {"total_mb": total, "used_mb": used, "free_mb": free, "percent": round(used / total * 100, 1) if total else 0}
+    except Exception:
+        return {"total_mb": 0, "used_mb": 0, "free_mb": 0, "percent": 0}
+
+
 @app.get("/health", tags=["Platform"])
 def health():
     """Health check endpoint."""
@@ -42,18 +53,14 @@ def ping():
 @app.get("/info", tags=["Platform"])
 def info(request: Request):
     """Container and runtime information."""
-    mem = psutil.virtual_memory()
+    mem = mem_info()
     return {
         "hostname": socket.gethostname(),
         "platform": platform.system(),
         "arch": platform.machine(),
         "python": platform.python_version(),
-        "memory": {
-            "total_mb": round(mem.total / 1024 / 1024),
-            "used_mb": round(mem.used / 1024 / 1024),
-            "percent": mem.percent,
-        },
-        "cpu_count": psutil.cpu_count(),
+        "memory": mem,
+        "cpu_count": os.cpu_count(),
         "uptime_s": int(time.time() - START_TIME),
         "env": safe_env(),
         "headers": dict(request.headers),
@@ -62,14 +69,13 @@ def info(request: Request):
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def dashboard():
-    mem = psutil.virtual_memory()
+    mem = mem_info()
     uptime = int(time.time() - START_TIME)
     hostname = socket.gethostname()
     env = safe_env()
     env_rows = "".join(
         f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in list(env.items())[:20]
     )
-    mem_pct = mem.percent
 
     return f"""<!DOCTYPE html>
 <html lang="fr">
@@ -116,16 +122,16 @@ def dashboard():
     <div class="stat"><span class="label">Hostname</span><span class="value">{hostname}</span></div>
     <div class="stat"><span class="label">Platform</span><span class="value">{platform.system()}/{platform.machine()}</span></div>
     <div class="stat"><span class="label">Python</span><span class="value">{platform.python_version()}</span></div>
-    <div class="stat"><span class="label">CPU cores</span><span class="value">{psutil.cpu_count()}</span></div>
+    <div class="stat"><span class="label">CPU cores</span><span class="value">{os.cpu_count()}</span></div>
     <div class="stat"><span class="label">Uptime</span><span class="value">{uptime}s</span></div>
   </div>
   <div class="card">
     <h2>Memory</h2>
-    <div class="stat"><span class="label">Used</span><span class="value">{round(mem.used/1024/1024)} MB</span></div>
-    <div class="stat"><span class="label">Total</span><span class="value">{round(mem.total/1024/1024)} MB</span></div>
+    <div class="stat"><span class="label">Used</span><span class="value">{mem['used_mb']} MB</span></div>
+    <div class="stat"><span class="label">Total</span><span class="value">{mem['total_mb']} MB</span></div>
     <div style="padding:.75rem 0">
-      <div class="progress-bar"><div class="progress-fill" style="width:{mem_pct}%"></div></div>
-      <div style="text-align:right;font-size:.75rem;color:#64748b;margin-top:4px">{mem_pct}%</div>
+      <div class="progress-bar"><div class="progress-fill" style="width:{mem['percent']}%"></div></div>
+      <div style="text-align:right;font-size:.75rem;color:#64748b;margin-top:4px">{mem['percent']}%</div>
     </div>
   </div>
   <div class="card full-width">
